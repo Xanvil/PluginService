@@ -1,0 +1,26 @@
+{
+  "name": "plugin-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Private NuGet V3 feed on Cloudflare Workers (R2 + D1)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "types": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply plugin-nuget --local",
+    "db:migrate:remote": "wrangler d1 migrations apply plugin-nuget --remote"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "wrangler": "^3.99.0"
+  }
+}

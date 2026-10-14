@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PluginService — 包商店</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell shell-wide">
+      <nav class="topnav" aria-label="主导航">
+        <a class="nav-brand" href="/">PluginService</a>
+        <div class="nav-links">
+          <a href="/" aria-current="page">商店</a>
+          <a href="/upload">上传</a>
+        </div>
+      </nav>
+
+      <!-- 列表视图 -->
+      <section id="view-list" class="view" hidden>
+        <header class="hero-store">
+          <h1>包商店</h1>
+          <p class="lede">浏览并安装私有 NuGet 包。源地址见页脚。</p>
+          <form id="search-form" class="search-bar" role="search">
+            <label class="sr-only" for="search-q">搜索包</label>
+            <input
+              id="search-q"
+              type="search"
+              placeholder="搜索… 支持 id: / packageid: / tags: / author:"
+              autocomplete="off"
+            />
+            <button type="submit">搜索</button>
+          </form>
+          <div
+            id="tag-filters"
+            class="tag-filters"
+            role="group"
+            aria-label="按标签筛选"
+          ></div>
+        </header>
+
+        <p id="list-meta" class="list-meta muted"></p>
+        <ul id="package-list" class="store-grid" aria-live="polite">
+          <li class="muted pad grid-span">加载中…</li>
+        </ul>
+      </section>
+
+      <!-- 详情视图 -->
+      <section id="view-detail" class="view" hidden>
+        <button type="button" id="back-btn" class="ghost back-btn">
+          ← 返回商店
+        </button>
+        <article id="detail" class="detail">
+          <p class="muted">加载中…</p>
+        </article>
+      </section>
+
+      <footer class="site-footer">
+        <p>
+          Service Index：
+          <a id="service-index-link" href="/v3/index.json"
+            ><code id="service-index-url">/v3/index.json</code></a
+          >
+        </p>
+      </footer>
+    </div>
+    <script src="/store.js" type="module"></script>
+  </body>
+</html>

@@ -52,12 +52,25 @@ export class AdminRouter {
           );
         }
         try {
+          // 预览响应刻意裁剪：避免大 README/图标令 JSON 与前端 Markdown 渲染卡死
+          const PREVIEW_TEXT_MAX = 48_000;
+          const PREVIEW_ICON_MAX = 64_000;
+
           const { meta, icon } = readPackage(bytes);
           const alreadyExists = await repo.versionExists(meta.id, meta.version);
+
+          const { text: releaseNotes, truncated: releaseNotesTruncated } =
+            truncateText(meta.releaseNotes, PREVIEW_TEXT_MAX);
+          const { text: readme, truncated: readmeTruncated } = truncateText(
+            meta.readme,
+            PREVIEW_TEXT_MAX,
+          );
+
           let iconDataUrl: string | null = null;
-          if (icon) {
+          if (icon && icon.bytes.byteLength <= PREVIEW_ICON_MAX) {
             iconDataUrl = `data:${icon.contentType};base64,${uint8ToBase64(icon.bytes)}`;
           }
+
           return json({
             id: meta.id,
             version: meta.version,
@@ -65,8 +78,10 @@ export class AdminRouter {
             description: meta.description ?? null,
             authors: meta.authors ?? null,
             tags: meta.tags ?? [],
-            releaseNotes: meta.releaseNotes ?? null,
-            readme: meta.readme ?? null,
+            releaseNotes,
+            releaseNotesTruncated,
+            readme,
+            readmeTruncated,
             projectUrl: meta.projectUrl ?? null,
             dependencyGroups: meta.dependencyGroups ?? [],
             iconDataUrl,
@@ -154,6 +169,16 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8" },
   });
+}
+
+/** 截断预览用长文本，避免超大响应。 */
+function truncateText(
+  raw: string | null | undefined,
+  maxChars: number,
+): { text: string | null; truncated: boolean } {
+  if (!raw) return { text: null, truncated: false };
+  if (raw.length <= maxChars) return { text: raw, truncated: false };
+  return { text: raw.slice(0, maxChars), truncated: true };
 }
 
 /** Uint8Array → base64（用于预览图标 data URL） */

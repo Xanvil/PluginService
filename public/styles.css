@@ -223,6 +223,28 @@ code {
   border-top: none;
 }
 
+.busy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.5rem;
+}
+
+.busy-row .status {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+body.is-admin-busy {
+  cursor: progress;
+}
+
+body.is-admin-busy .shell-admin input[type="file"],
+body.is-admin-busy .shell-admin button[type="submit"] {
+  pointer-events: none;
+}
+
 /* —— 上传预览 —— */
 .pkg-preview {
   margin: 1rem 0 0.5rem;

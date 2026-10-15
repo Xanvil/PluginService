@@ -1,11 +1,15 @@
 /**
  * 管理页：API Key 门禁 + 上传预览 + 发布 + 列表硬删除。
- * 与 CLI 共用 NUGET_API_KEY；请求头为 X-NuGet-ApiKey。
+ * 请求带超时与可取消；预览 Markdown 异步渲染，避免主线程长时间卡住。
  */
 
 import { renderMarkdown } from "./markdown.js";
 
 const KEY_STORAGE = "pluginService.nugetApiKey";
+/** 预览 / 发布超时（大包解压可能较慢） */
+const UPLOAD_TIMEOUT_MS = 90_000;
+/** 列表等轻量请求超时 */
+const LIGHT_TIMEOUT_MS = 20_000;
 
 const gatePanel = document.getElementById("gate-panel");
 const gateForm = document.getElementById("gate-form");
@@ -22,6 +26,7 @@ const submitBtn = document.getElementById("submit-btn");
 const uploadStatus = document.getElementById("upload-status");
 const previewStatus = document.getElementById("preview-status");
 const previewPanel = document.getElementById("preview-panel");
+const cancelBusyBtn = document.getElementById("cancel-busy-btn");
 
 const previewIcon = document.getElementById("preview-icon");
 const previewIdver = document.getElementById("preview-idver");
@@ -53,8 +58,14 @@ serviceIndexLink.href = indexHref;
 
 /** 预览成功后才允许发布 */
 let previewOk = false;
-/** 用于取消过期的预览请求 */
+/** 用于丢弃过期预览结果 */
 let previewSeq = 0;
+/** 当前可取消的请求 */
+let activeAbort = null;
+/** 忙态心跳定时器 */
+let busyTimer = null;
+let busyStartedAt = 0;
+let busyLabel = "";
 
 /** @returns {string} */
 function getAccessKey() {
@@ -82,17 +93,121 @@ function setListStatus(text, kind) {
 }
 
 /**
+ * 进入/退出忙态：禁用交互、显示取消、心跳提示避免「假死」。
+ * @param {boolean} busy
+ * @param {string} [label]
+ * @param {(s: string) => void} [statusSetter]
+ */
+function setBusy(busy, label = "", statusSetter = setPreviewStatus) {
+  if (busyTimer) {
+    clearInterval(busyTimer);
+    busyTimer = null;
+  }
+
+  if (!busy) {
+    document.body.classList.remove("is-admin-busy");
+    cancelBusyBtn.hidden = true;
+    fileInput.disabled = false;
+    busyLabel = "";
+    return;
+  }
+
+  document.body.classList.add("is-admin-busy");
+  cancelBusyBtn.hidden = false;
+  fileInput.disabled = true;
+  busyLabel = label || "处理中";
+  busyStartedAt = Date.now();
+  statusSetter(`${busyLabel}…`);
+  busyTimer = setInterval(() => {
+    const sec = Math.round((Date.now() - busyStartedAt) / 1000);
+    statusSetter(`${busyLabel}…（已等待 ${sec}s）`);
+  }, 1000);
+}
+
+/** 仅中止进行中的 fetch，不改 previewSeq / 忙态 */
+function abortInFlight() {
+  if (activeAbort) {
+    activeAbort.abort();
+    activeAbort = null;
+  }
+}
+
+/** 用户取消或切换文件：中止请求并作废未完成的预览序号 */
+function cancelActive() {
+  abortInFlight();
+  previewSeq += 1;
+  setBusy(false);
+}
+
+/**
+ * 带超时与 AbortSignal 的管理 API 请求。
+ * 新请求会中止上一个 in-flight fetch，但不会作废 previewSeq。
  * @param {string} path
- * @param {RequestInit} [init]
+ * @param {RequestInit & { timeoutMs?: number }} [init]
  */
 async function adminFetch(path, init = {}) {
   const key = getAccessKey();
   if (!key) {
     throw new Error("请先填写 API Key");
   }
+
+  const timeoutMs = init.timeoutMs ?? LIGHT_TIMEOUT_MS;
   const headers = new Headers(init.headers || {});
   headers.set("X-NuGet-ApiKey", key);
-  return fetch(path, { ...init, headers });
+
+  abortInFlight();
+  const controller = new AbortController();
+  activeAbort = controller;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const { timeoutMs: _t, signal: _s, ...rest } = init;
+    const res = await fetch(path, {
+      ...rest,
+      headers,
+      signal: controller.signal,
+    });
+    return res;
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new Error(`请求超时或已取消（>${Math.round(timeoutMs / 1000)}s）`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    if (activeAbort === controller) activeAbort = null;
+  }
+}
+
+/** 让出主线程，避免大段 Markdown 渲染卡死 UI */
+function yieldToUi() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => setTimeout(resolve, 0));
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+}
+
+/**
+ * @param {HTMLElement} el
+ * @param {string | null | undefined} md
+ * @param {boolean} [truncated]
+ */
+async function renderMdDeferred(el, md, truncated) {
+  await yieldToUi();
+  if (!md || !String(md).trim()) {
+    el.innerHTML = `<p class="muted">无</p>`;
+    return;
+  }
+  el.innerHTML = renderMarkdown(String(md));
+  if (truncated) {
+    const tip = document.createElement("p");
+    tip.className = "muted";
+    tip.textContent = "（预览已截断，完整内容发布后可在商店查看）";
+    el.appendChild(tip);
+  }
 }
 
 function showUnlocked(unlocked) {
@@ -131,13 +246,13 @@ function formatBytes(n) {
 }
 
 /**
- * 将预览 API 结果渲染到面板。
  * @param {Record<string, unknown>} data
  */
-function renderPreview(data) {
+async function renderPreview(data) {
   previewPanel.hidden = false;
   previewIdver.textContent = `${data.id} ${data.version}`;
-  previewTitle.textContent = data.title && data.title !== data.id ? String(data.title) : "";
+  previewTitle.textContent =
+    data.title && data.title !== data.id ? String(data.title) : "";
   previewAuthors.textContent = data.authors ? String(data.authors) : "—";
   previewSize.textContent = formatBytes(Number(data.sizeBytes));
   previewDescription.textContent = data.description
@@ -210,20 +325,23 @@ function renderPreview(data) {
   }
   previewDepsWrap.hidden = !hasDep;
 
-  // Release Notes：始终展示区块，便于确认是否解析到
   previewNotesWrap.hidden = false;
-  if (data.releaseNotes && String(data.releaseNotes).trim()) {
-    previewNotes.innerHTML = renderMarkdown(String(data.releaseNotes));
-  } else {
-    previewNotes.innerHTML = `<p class="muted">无</p>`;
-  }
+  previewReadmeWrap.hidden = false;
+  previewNotes.innerHTML = `<p class="muted">渲染中…</p>`;
+  previewReadme.innerHTML = `<p class="muted">渲染中…</p>`;
 
-  if (data.readme) {
-    previewReadmeWrap.hidden = false;
-    previewReadme.innerHTML = renderMarkdown(String(data.readme));
-  } else {
+  await renderMdDeferred(
+    previewNotes,
+    data.releaseNotes ? String(data.releaseNotes) : null,
+    !!data.releaseNotesTruncated,
+  );
+  await renderMdDeferred(
+    previewReadme,
+    data.readme ? String(data.readme) : null,
+    !!data.readmeTruncated,
+  );
+  if (!data.readme) {
     previewReadmeWrap.hidden = true;
-    previewReadme.innerHTML = "";
   }
 }
 
@@ -231,7 +349,7 @@ function renderPreview(data) {
 async function previewFile(file) {
   const seq = ++previewSeq;
   clearPreview();
-  setPreviewStatus("正在解析包…");
+  setBusy(true, "正在上传并解析", setPreviewStatus);
 
   const body = new FormData();
   body.append("package", file, file.name);
@@ -240,14 +358,25 @@ async function previewFile(file) {
     const res = await adminFetch("/admin/api/preview", {
       method: "POST",
       body,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
     });
     if (seq !== previewSeq) return;
+
+    setPreviewStatus("正在解析响应…");
     const payload = await res.json().catch(() => ({}));
+    if (seq !== previewSeq) return;
+
     if (!res.ok) {
+      setBusy(false);
       setPreviewStatus(payload.error || `解析失败（${res.status}）`, "err");
       return;
     }
-    renderPreview(payload);
+
+    setPreviewStatus("正在渲染预览…");
+    await renderPreview(payload);
+    if (seq !== previewSeq) return;
+
+    setBusy(false);
     setPreviewStatus(
       payload.alreadyExists
         ? "预览完成（版本冲突，无法发布）"
@@ -256,6 +385,7 @@ async function previewFile(file) {
     );
   } catch (e) {
     if (seq !== previewSeq) return;
+    setBusy(false);
     setPreviewStatus(e instanceof Error ? e.message : "网络错误", "err");
   }
 }
@@ -268,10 +398,13 @@ async function unlock() {
     return false;
   }
 
-  setGateStatus("正在验证…");
+  setBusy(true, "正在验证", setGateStatus);
   try {
-    const res = await adminFetch("/admin/api/packages?take=1");
+    const res = await adminFetch("/admin/api/packages?take=1", {
+      timeoutMs: LIGHT_TIMEOUT_MS,
+    });
     const payload = await res.json().catch(() => ({}));
+    setBusy(false);
     if (!res.ok) {
       setGateStatus(payload.error || `验证失败（${res.status}）`, "err");
       showUnlocked(false);
@@ -287,6 +420,7 @@ async function unlock() {
     await refreshList();
     return true;
   } catch (e) {
+    setBusy(false);
     setGateStatus(e instanceof Error ? e.message : "网络错误", "err");
     showUnlocked(false);
     return false;
@@ -302,7 +436,9 @@ async function refreshList() {
     const url = new URL("/admin/api/packages", location.origin);
     if (q) url.searchParams.set("q", q);
     url.searchParams.set("take", "100");
-    const res = await adminFetch(url.pathname + url.search);
+    const res = await adminFetch(url.pathname + url.search, {
+      timeoutMs: LIGHT_TIMEOUT_MS,
+    });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
       setListStatus(payload.error || `加载失败（${res.status}）`, "err");
@@ -381,11 +517,15 @@ function renderPackageCard(pkg) {
  */
 async function deleteVersion(id, version) {
   if (!confirm(`硬删除 ${id} ${version}？此操作不可恢复。`)) return;
-  setListStatus(`正在删除 ${id} ${version}…`);
+  setBusy(true, `正在删除 ${id} ${version}`, setListStatus);
   try {
     const path = `/admin/api/packages/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}`;
-    const res = await adminFetch(path, { method: "DELETE" });
+    const res = await adminFetch(path, {
+      method: "DELETE",
+      timeoutMs: LIGHT_TIMEOUT_MS,
+    });
     const payload = await res.json().catch(() => ({}));
+    setBusy(false);
     if (!res.ok) {
       setListStatus(payload.error || `删除失败（${res.status}）`, "err");
       return;
@@ -393,6 +533,7 @@ async function deleteVersion(id, version) {
     setListStatus(`已删除 ${id} ${version}`, "ok");
     await refreshList();
   } catch (e) {
+    setBusy(false);
     setListStatus(e instanceof Error ? e.message : "网络错误", "err");
   }
 }
@@ -400,11 +541,15 @@ async function deleteVersion(id, version) {
 /** @param {string} id */
 async function deletePackage(id) {
   if (!confirm(`硬删除整包 ${id}（全部版本）？此操作不可恢复。`)) return;
-  setListStatus(`正在删除整包 ${id}…`);
+  setBusy(true, `正在删除整包 ${id}`, setListStatus);
   try {
     const path = `/admin/api/packages/${encodeURIComponent(id)}`;
-    const res = await adminFetch(path, { method: "DELETE" });
+    const res = await adminFetch(path, {
+      method: "DELETE",
+      timeoutMs: LIGHT_TIMEOUT_MS,
+    });
     const payload = await res.json().catch(() => ({}));
+    setBusy(false);
     if (!res.ok) {
       setListStatus(payload.error || `删除失败（${res.status}）`, "err");
       return;
@@ -412,6 +557,7 @@ async function deletePackage(id) {
     setListStatus(`已删除整包 ${id}`, "ok");
     await refreshList();
   } catch (e) {
+    setBusy(false);
     setListStatus(e instanceof Error ? e.message : "网络错误", "err");
   }
 }
@@ -421,7 +567,15 @@ gateForm.addEventListener("submit", async (event) => {
   await unlock();
 });
 
+cancelBusyBtn.addEventListener("click", () => {
+  cancelActive();
+  setPreviewStatus("已取消", "err");
+  setUploadStatus("");
+  submitBtn.disabled = !previewOk;
+});
+
 logoutBtn.addEventListener("click", () => {
+  cancelActive();
   try {
     sessionStorage.removeItem(KEY_STORAGE);
   } catch {
@@ -442,6 +596,7 @@ fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
   fileNameEl.textContent = file ? file.name : "未选择文件";
   setUploadStatus("");
+  cancelActive();
   clearPreview();
 
   if (!file) return;
@@ -478,14 +633,16 @@ uploadForm.addEventListener("submit", async (event) => {
   body.append("package", file, file.name);
 
   submitBtn.disabled = true;
-  setUploadStatus("正在上传…");
+  setBusy(true, "正在发布", setUploadStatus);
 
   try {
     const res = await adminFetch("/admin/api/publish", {
       method: "POST",
       body,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
     });
     const payload = await res.json().catch(() => ({}));
+    setBusy(false);
     if (!res.ok) {
       setUploadStatus(
         payload.error || payload.message || `上传失败（${res.status}）`,
@@ -502,6 +659,7 @@ uploadForm.addEventListener("submit", async (event) => {
     clearPreview();
     await refreshList();
   } catch (e) {
+    setBusy(false);
     setUploadStatus(e instanceof Error ? e.message : "网络错误", "err");
     submitBtn.disabled = !previewOk;
   }

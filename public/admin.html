@@ -121,7 +121,12 @@
                   <div id="preview-readme" class="md-body doc-panel"></div>
                 </div>
               </div>
-              <p id="preview-status" class="status" role="status" aria-live="polite"></p>
+              <div class="busy-row">
+                <p id="preview-status" class="status" role="status" aria-live="polite"></p>
+                <button type="button" id="cancel-busy-btn" class="btn-ghost btn-sm" hidden>
+                  取消
+                </button>
+              </div>
 
               <div class="actions">
                 <button type="submit" id="submit-btn" disabled>上传并发布</button>

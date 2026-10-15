@@ -374,93 +374,56 @@ function decodeXml(s: string): string {
 }
 
 /**
- * 从 multipart/form-data 请求体中取出第一个文件部件（NuGet Publish 约定）。
+ * 从请求体取出 nupkg 字节（NuGet Publish / 管理上传约定）。
+ * multipart 优先走平台 `formData()`（更快），失败再回退手工解析。
  */
 export async function extractNupkgFromRequest(
   request: Request,
 ): Promise<Uint8Array> {
   const contentType = request.headers.get("Content-Type") ?? "";
+
+  if (contentType.toLowerCase().includes("multipart/form-data")) {
+    try {
+      const form = await request.formData();
+      const fromForm = await bytesFromFormData(form);
+      if (fromForm && fromForm.byteLength > 0) return fromForm;
+      throw new Error("multipart body did not contain a package part");
+    } catch (e) {
+      // formData 已消费 body，无法再手工解析；直接抛出
+      if (e instanceof Error && e.message.includes("package part")) throw e;
+      throw new Error(
+        e instanceof Error ? e.message : "Failed to parse multipart body",
+      );
+    }
+  }
+
   const body = new Uint8Array(await request.arrayBuffer());
   if (body.byteLength === 0) {
     throw new Error("Empty request body");
   }
-
-  if (!contentType.toLowerCase().includes("multipart/form-data")) {
-    return body;
-  }
-
-  const boundaryMatch = /boundary=([^;]+)/i.exec(contentType);
-  if (!boundaryMatch) {
-    throw new Error("multipart/form-data missing boundary");
-  }
-
-  const boundary = boundaryMatch[1]!.trim().replace(/^"|"$/g, "");
-  const extracted = extractFirstMultipartFile(body, boundary);
-  if (!extracted) {
-    throw new Error("multipart body did not contain a package part");
-  }
-  return extracted;
+  return body;
 }
 
-function extractFirstMultipartFile(
-  body: Uint8Array,
-  boundary: string,
-): Uint8Array | null {
-  const enc = new TextEncoder();
-  const dec = new TextDecoder();
-  const delim = enc.encode(`--${boundary}`);
-  const parts = splitBy(body, delim);
-
-  for (const part of parts) {
-    if (part.byteLength < 4) continue;
-    let slice = part;
-    if (slice[0] === 13 && slice[1] === 10) {
-      slice = slice.subarray(2);
-    }
-    if (slice[0] === 45 && slice[1] === 45) continue;
-
-    const headerEnd = indexOfBytes(slice, enc.encode("\r\n\r\n"));
-    if (headerEnd < 0) continue;
-    const headers = dec.decode(slice.subarray(0, headerEnd));
-    let content = slice.subarray(headerEnd + 4);
-    if (
-      content.byteLength >= 2 &&
-      content[content.byteLength - 2] === 13 &&
-      content[content.byteLength - 1] === 10
-    ) {
-      content = content.subarray(0, content.byteLength - 2);
-    }
-
-    if (content.byteLength > 0 && /content-disposition/i.test(headers)) {
-      return content;
+/** 从 FormData 取名为 package / file 的文件，或第一个 Blob 字段 */
+async function bytesFromFormData(form: FormData): Promise<Uint8Array | null> {
+  const preferred =
+    form.get("package") ?? form.get("file") ?? form.get("content");
+  if (isBlobLike(preferred)) {
+    return new Uint8Array(await preferred.arrayBuffer());
+  }
+  for (const value of form.values()) {
+    if (isBlobLike(value) && value.size > 0) {
+      return new Uint8Array(await value.arrayBuffer());
     }
   }
   return null;
 }
 
-function splitBy(data: Uint8Array, sep: Uint8Array): Uint8Array[] {
-  const parts: Uint8Array[] = [];
-  let start = 0;
-  let idx = indexOfBytes(data, sep, start);
-  while (idx >= 0) {
-    parts.push(data.subarray(start, idx));
-    start = idx + sep.length;
-    idx = indexOfBytes(data, sep, start);
-  }
-  parts.push(data.subarray(start));
-  return parts;
-}
-
-function indexOfBytes(
-  haystack: Uint8Array,
-  needle: Uint8Array,
-  from = 0,
-): number {
-  outer: for (let i = from; i <= haystack.length - needle.length; i++) {
-    for (let j = 0; j < needle.length; j++) {
-      if (haystack[i + j] !== needle[j]) continue outer;
-    }
-    return i;
-  }
-  return -1;
+function isBlobLike(value: unknown): value is Blob {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Blob).arrayBuffer === "function" &&
+    typeof (value as Blob).size === "number"
+  );
 }

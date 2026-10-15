@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assertPushAuthorized, timingSafeEqualString } from "../src/nuget/auth";
+import {
+  assertAdminAuthorized,
+  assertPushAuthorized,
+  timingSafeEqualString,
+} from "../src/nuget/auth";
 import type { Env } from "../src/nuget/types";
 
 describe("timingSafeEqualString", () => {
@@ -43,6 +47,29 @@ describe("assertPushAuthorized", () => {
     });
     try {
       assertPushAuthorized(req, env);
+      expect.fail("should throw");
+    } catch (e) {
+      expect((e as { status: number }).status).toBe(401);
+    }
+  });
+});
+
+describe("assertAdminAuthorized", () => {
+  const env = { NUGET_API_KEY: "secret-key" } as Env;
+
+  it("与推送共用同一密钥与请求头", () => {
+    const req = new Request("https://example.com/admin/api/packages", {
+      headers: { "X-NuGet-ApiKey": "secret-key" },
+    });
+    expect(() => assertAdminAuthorized(req, env)).not.toThrow();
+  });
+
+  it("错误密钥返回 401", () => {
+    const req = new Request("https://example.com/admin/api/packages", {
+      headers: { "X-NuGet-ApiKey": "wrong" },
+    });
+    try {
+      assertAdminAuthorized(req, env);
       expect.fail("should throw");
     } catch (e) {
       expect((e as { status: number }).status).toBe(401);

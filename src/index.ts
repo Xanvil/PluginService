@@ -1,23 +1,27 @@
 /**
  * PluginService — Cloudflare Workers 入口。
- * `/v3/*` 走 NuGet V3 API；其余走静态资源（商店 / 上传页）。
+ * `/v3/*` 走 NuGet V3 API；`/admin/api/*` 走管理 API；其余走静态资源。
  *
  * 注意：不要把 `/` 再改写成 `/index.html` 再交给 ASSETS——
  * Assets 默认 html_handling 会把 `/index.html` 307 回 `/`，造成重定向死循环。
  */
 
+import { AdminRouter } from "./admin/router";
 import { NuGetRouter } from "./nuget/router";
 import type { Env } from "./nuget/types";
 
 const router = new NuGetRouter();
+const adminRouter = new AdminRouter();
 
 export default {
   /**
    * Worker fetch 入口：
    * - `/v3/*`：NuGet API
-   * - `/packages/*`：商店 SPA（直接返回 index.html 正文，禁止跟随 307）
-   * - `/upload`：上传页（同上，映射 upload.html）
-   * - 其它：原样交给 ASSETS（`/` 由 Assets 提供 index）
+   * - `/admin/api/*`：管理 API（需 X-NuGet-ApiKey，与 CLI 同一密钥）
+   * - `/admin`：管理页
+   * - `/upload`：301 → `/admin`
+   * - `/packages/*`：商店 SPA
+   * - 其它：原样交给 ASSETS
    */
   async fetch(
     request: Request,
@@ -39,17 +43,26 @@ export default {
       return withCors(response);
     }
 
-    // 商店首页 / 详情：直接返回 index.html 正文（html_handling=none 时 `/` 不会自动映射）
+    if (path === "/admin/api" || path.startsWith("/admin/api/")) {
+      const response = await adminRouter.handle(request, env);
+      return withCors(response);
+    }
+
+    // 旧上传页入口 → 管理页
+    if (path === "/upload" || path === "/upload/") {
+      return Response.redirect(new URL("/admin", url.origin).href, 301);
+    }
+
+    // 管理页
+    if (path === "/admin" || path === "/admin/") {
+      return serveStaticFile(env, url.origin, "/admin.html");
+    }
+
+    // 商店首页 / 详情：直接返回 index.html 正文
     if (path === "/" || path.startsWith("/packages/")) {
       return serveStaticFile(env, url.origin, "/index.html");
     }
 
-    // /upload → upload.html
-    if (path === "/upload" || path === "/upload/") {
-      return serveStaticFile(env, url.origin, "/upload.html");
-    }
-
-    // css、js 等静态文件
     return env.ASSETS.fetch(request);
   },
 };
@@ -70,7 +83,6 @@ async function serveStaticFile(
     }),
   );
 
-  // 若仍收到重定向，直接读目标正文一次（不再进入 Worker 路由）
   if (res.status >= 300 && res.status < 400) {
     const loc = res.headers.get("Location");
     if (loc) {
@@ -82,7 +94,6 @@ async function serveStaticFile(
         }),
       );
       if (again.status >= 300 && again.status < 400) {
-        // 最后手段：对 `/` 取 Assets（通常能直接出 index）
         return env.ASSETS.fetch(new Request(new URL("/", origin)));
       }
       return again;
@@ -107,7 +118,7 @@ function withCors(response: Response): Response {
 function corsHeaders(): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, PUT, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, PUT, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Headers":
       "Content-Type, X-NuGet-ApiKey, Authorization",
   };

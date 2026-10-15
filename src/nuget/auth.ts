@@ -1,13 +1,13 @@
 /**
- * 推送鉴权：校验 X-NuGet-ApiKey 与环境密钥是否一致。
+ * 鉴权：推送与管理页共用 NUGET_API_KEY。
  */
 
 import type { Env } from "./types";
 
 /**
- * 断言请求具备推送权限。
- * 从 `X-NuGet-ApiKey` 读取密钥，使用近似常量时间比较，避免简单时序泄漏。
- * @returns 通过时无返回值；失败时抛出带 status 的 Error（401）
+ * 断言请求具备推送 / 管理权限。
+ * 从 `X-NuGet-ApiKey` 读取密钥，与 `NUGET_API_KEY` 做近似常量时间比较。
+ * @returns 通过时无返回值；失败时抛出带 status 的 Error（401 / 500）
  */
 export function assertPushAuthorized(request: Request, env: Env): void {
   const provided = request.headers.get("X-NuGet-ApiKey") ?? "";
@@ -24,6 +24,14 @@ export function assertPushAuthorized(request: Request, env: Env): void {
     (err as Error & { status: number }).status = 401;
     throw err;
   }
+}
+
+/**
+ * 管理页鉴权（与 CLI 推送同一密钥 / 同一请求头）。
+ * 等价于 `assertPushAuthorized`。
+ */
+export function assertAdminAuthorized(request: Request, env: Env): void {
+  assertPushAuthorized(request, env);
 }
 
 /**

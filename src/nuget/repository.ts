@@ -70,7 +70,8 @@ export function resolveIconUrl(
 
 /**
  * NuGet 包数据访问层。
- * 核心方法：listVersions / getPackageObject / getRegistration / search / publish。
+ * 核心方法：listVersions / getPackageObject / getRegistration / search /
+ * publish / publishBytes / deleteVersion / deletePackage。
  */
 export class PackageRepository {
   constructor(private readonly env: Env) {}
@@ -402,12 +403,10 @@ export class PackageRepository {
   }
 
   /**
-   * 发布包：校验 API Key → 解析 nupkg → 写 R2 → upsert D1。
-   * 同 id+version 已存在时抛出 PublishError 409。
+   * 发布包（NuGet CLI）：校验 X-NuGet-ApiKey → 解析请求体 → 写 R2 / D1。
    */
   async publish(request: Request): Promise<{ id: string; version: string }> {
     assertPushAuthorized(request, this.env);
-
     let bytes: Uint8Array;
     try {
       bytes = await extractNupkgFromRequest(request);
@@ -417,7 +416,14 @@ export class PackageRepository {
         e instanceof Error ? e.message : "Invalid package body",
       );
     }
+    return this.publishBytes(bytes);
+  }
 
+  /**
+   * 从已解析的 nupkg 字节发布（供管理页；调用方自行鉴权）。
+   * 同 id+version 已存在时抛出 PublishError 409。
+   */
+  async publishBytes(bytes: Uint8Array): Promise<{ id: string; version: string }> {
     let meta: PackageMetadata;
     let iconBytes: Uint8Array | undefined;
     let iconContentType: string | undefined;
@@ -446,7 +452,6 @@ export class PackageRepository {
       meta.iconKey = iconKey;
       meta.iconContentType = iconContentType;
     }
-    // 不把二进制写入 JSON
     const now = new Date().toISOString();
 
     const existing = await this.env.DB.prepare(
@@ -462,7 +467,6 @@ export class PackageRepository {
       );
     }
 
-    // 先写 R2（包 + 可选图标），再写 D1；失败时回滚 R2
     await this.env.PACKAGES.put(key, bytes, {
       httpMetadata: {
         contentType: "application/octet-stream",
@@ -518,7 +522,6 @@ export class PackageRepository {
       } else {
         const latest =
           pickLatestVersion([pkg.latest_version, meta.version]) ?? meta.version;
-        // 包级 tags 取各版本并集，保证历史上出现过的标签都能筛到该包
         const mergedTags = tagsToStorage(
           mergeTagLists(splitStoredTags(pkg.tags), meta.tags),
         );
@@ -559,6 +562,163 @@ export class PackageRepository {
     return { id: meta.id, version: meta.version };
   }
 
+  /**
+   * 硬删除单个版本：R2（nupkg + 图标）+ D1 package_versions。
+   * 若无剩余版本则删除 packages 行；否则重算 latest_version。
+   * @returns 是否找到并删除了该版本
+   */
+  async deleteVersion(id: string, version: string): Promise<boolean> {
+    const idLower = id.toLowerCase();
+    const versionLower = version.toLowerCase();
+
+    const row = await this.env.DB.prepare(
+      `SELECT content_key, nuspec_json FROM package_versions
+       WHERE id_lower = ? AND version_lower = ?`,
+    )
+      .bind(idLower, versionLower)
+      .first<{ content_key: string; nuspec_json: string }>();
+
+    if (!row) return false;
+
+    const iconKey = iconKeyFromNuspec(row.nuspec_json);
+    await this.env.PACKAGES.delete(row.content_key);
+    if (iconKey) {
+      try {
+        await this.env.PACKAGES.delete(iconKey);
+      } catch {
+        console.error("Failed to delete icon object", iconKey);
+      }
+    }
+
+    await this.env.DB.prepare(
+      `DELETE FROM package_versions WHERE id_lower = ? AND version_lower = ?`,
+    )
+      .bind(idLower, versionLower)
+      .run();
+
+    const remaining = await this.env.DB.prepare(
+      `SELECT version FROM package_versions WHERE id_lower = ?`,
+    )
+      .bind(idLower)
+      .all<{ version: string }>();
+
+    const versions = (remaining.results ?? []).map((r) => r.version);
+    if (versions.length === 0) {
+      await this.env.DB.prepare(`DELETE FROM packages WHERE id_lower = ?`)
+        .bind(idLower)
+        .run();
+    } else {
+      const latest = pickLatestVersion(versions) ?? versions[0]!;
+      await this.env.DB.prepare(
+        `UPDATE packages SET latest_version = ?, updated_at = ? WHERE id_lower = ?`,
+      )
+        .bind(latest, new Date().toISOString(), idLower)
+        .run();
+    }
+
+    return true;
+  }
+
+  /**
+   * 硬删除整包：该 id 下全部版本的 R2 对象与 D1 行。
+   * @returns 是否找到并删除了该包
+   */
+  async deletePackage(id: string): Promise<boolean> {
+    const idLower = id.toLowerCase();
+
+    const pkg = await this.env.DB.prepare(
+      `SELECT id_lower FROM packages WHERE id_lower = ?`,
+    )
+      .bind(idLower)
+      .first();
+    if (!pkg) return false;
+
+    const versionRows = await this.env.DB.prepare(
+      `SELECT content_key, nuspec_json FROM package_versions WHERE id_lower = ?`,
+    )
+      .bind(idLower)
+      .all<{ content_key: string; nuspec_json: string }>();
+
+    for (const row of versionRows.results ?? []) {
+      try {
+        await this.env.PACKAGES.delete(row.content_key);
+        const iconKey = iconKeyFromNuspec(row.nuspec_json);
+        if (iconKey) await this.env.PACKAGES.delete(iconKey);
+      } catch {
+        console.error("Failed to delete R2 objects for package", idLower);
+      }
+    }
+
+    await this.env.DB.prepare(
+      `DELETE FROM package_versions WHERE id_lower = ?`,
+    )
+      .bind(idLower)
+      .run();
+    await this.env.DB.prepare(`DELETE FROM packages WHERE id_lower = ?`)
+      .bind(idLower)
+      .run();
+
+    return true;
+  }
+
+  /**
+   * 管理列表：返回包 id、最新版本、全部版本列表（按更新时间倒序）。
+   */
+  async listForAdmin(
+    q: string,
+    take = 50,
+  ): Promise<
+    Array<{
+      id: string;
+      latestVersion: string;
+      versions: string[];
+      updatedAt: string;
+    }>
+  > {
+    const limit = Math.min(Math.max(1, take), 200);
+    const needle = q.trim().toLowerCase();
+
+    const rows = needle
+      ? await this.env.DB.prepare(
+          `SELECT * FROM packages
+           WHERE id_lower LIKE ? OR lower(coalesce(title,'')) LIKE ?
+           ORDER BY updated_at DESC
+           LIMIT ?`,
+        )
+          .bind(`%${needle}%`, `%${needle}%`, limit)
+          .all<PackageRow>()
+      : await this.env.DB.prepare(
+          `SELECT * FROM packages ORDER BY updated_at DESC LIMIT ?`,
+        )
+          .bind(limit)
+          .all<PackageRow>();
+
+    const out: Array<{
+      id: string;
+      latestVersion: string;
+      versions: string[];
+      updatedAt: string;
+    }> = [];
+
+    for (const pkg of rows.results ?? []) {
+      const verRows = await this.env.DB.prepare(
+        `SELECT version FROM package_versions WHERE id_lower = ?`,
+      )
+        .bind(pkg.id_lower)
+        .all<{ version: string }>();
+      const versions = (verRows.results ?? []).map((r) => r.version);
+      versions.sort((a, b) => compareNuGetVersions(b, a));
+      out.push({
+        id: pkg.id,
+        latestVersion: pkg.latest_version,
+        versions,
+        updatedAt: pkg.updated_at,
+      });
+    }
+
+    return out;
+  }
+
   /** 下载成功后增加下载计数（best-effort） */
   async incrementDownload(id: string): Promise<void> {
     try {
@@ -570,6 +730,16 @@ export class PackageRepository {
     } catch {
       // ignore
     }
+  }
+}
+
+/** 从版本 nuspec_json 解析嵌入图标 R2 键 */
+function iconKeyFromNuspec(nuspecJson: string): string | undefined {
+  try {
+    const meta = JSON.parse(nuspecJson) as PackageMetadata;
+    return meta.iconKey || undefined;
+  } catch {
+    return undefined;
   }
 }
 

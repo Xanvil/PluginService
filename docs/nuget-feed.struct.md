@@ -14,10 +14,14 @@ classDiagram
     +list_search_/
     +detail_/packages_id
   }
-  class UploadPage {
-    +PUT_/v3/package multipart
+  class AdminPage {
+    +gate_access_key
+    +upload_delete
   }
   class NuGetRouter {
+    +handle(request, env) Response
+  }
+  class AdminRouter {
     +handle(request, env) Response
   }
   class PackageRepository {
@@ -26,6 +30,10 @@ classDiagram
     +getRegistration(id, baseUrl) object
     +search(q, skip, take, baseUrl) object
     +publish(request) object
+    +publishBytes(bytes) object
+    +deleteVersion(id, version) bool
+    +deletePackage(id) bool
+    +listForAdmin(q, take) object
   }
   class NupkgReader {
     +readMetadata(bytes) PackageMetadata
@@ -33,6 +41,7 @@ classDiagram
   }
   class ApiKeyAuth {
     +assertPushAuthorized(request, env) void
+    +assertAdminAuthorized(request, env) void
   }
   class Env {
     +DB D1Database
@@ -41,14 +50,17 @@ classDiagram
   }
 
   WorkerEntry --> NuGetRouter : path_/v3
+  WorkerEntry --> AdminRouter : path_/admin_api
   WorkerEntry --> Assets : other_paths
   Assets --> StorePage : serves_/_packages
-  Assets --> UploadPage : serves_/upload
+  Assets --> AdminPage : serves_/admin
   StorePage --> NuGetRouter : GET_query_registration
-  UploadPage --> NuGetRouter : PUT_package
+  AdminPage --> AdminRouter : admin_api
   NuGetRouter --> PackageRepository : uses
+  AdminRouter --> PackageRepository : uses
+  AdminRouter --> ApiKeyAuth : assertAdmin
   PackageRepository --> NupkgReader : publish
-  PackageRepository --> ApiKeyAuth : publish
+  PackageRepository --> ApiKeyAuth : publish_CLI
   PackageRepository --> Env : bindings
 ```
 
@@ -58,16 +70,18 @@ classDiagram
 flowchart TD
   req[HTTP_Request] --> entry[src/index.ts_fetch]
   entry -->|path_/v3| router[NuGetRouter.handle]
+  entry -->|path_/admin_api| admin[AdminRouter.handle]
+  entry -->|path_/admin| adminHtml[admin.html]
   entry -->|else| assets[ASSETS_public]
-  assets --> page[upload_page]
-  page -->|PUT_/v3/package| router
+  admin -->|assertAdminAuthorized| adminOps[list_publish_delete]
+  adminOps --> repo[PackageRepository]
   router -->|GET_/v3/index.json| index[ServiceIndex]
   router -->|GET_flatcontainer| flat[listVersions_or_R2_stream]
   router -->|GET_registration| reg[getRegistration]
   router -->|GET_/v3/query| search[search]
   router -->|PUT_/v3/package| pub[publish]
   pub --> auth[assertPushAuthorized]
-  auth --> parse[readMetadata]
+  auth --> parse[publishBytes]
   parse --> r2[R2_put]
   r2 --> d1[D1_upsert]
 ```
@@ -79,10 +93,12 @@ flowchart LR
   subgraph d1 [D1]
     packages[packages]
     versions[package_versions]
-    packages --> versions
   end
   subgraph r2 [R2]
-    obj["packages/id/ver/id.ver.nupkg"]
+    nupkg[packages_id_ver_nupkg]
+    icon[packages_id_ver_icon]
   end
-  versions -->|content_key| obj
+  packages --> versions
+  versions -->|content_key| nupkg
+  versions -->|iconKey_in_nuspec| icon
 ```

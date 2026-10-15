@@ -12,6 +12,7 @@
   --mono: "IBM Plex Mono", ui-monospace, monospace;
   --shell-wide: 72rem;
   --shell-upload: 40rem;
+  --shell-admin: 52rem;
   --aside-w: 20rem;
   --bp: 720px;
 }
@@ -66,6 +67,160 @@ code {
 
 .shell-upload {
   width: min(var(--shell-upload), calc(100% - 2rem));
+}
+
+.shell-admin {
+  width: min(var(--shell-admin), calc(100% - 2rem));
+}
+
+.panel-title {
+  margin: 0 0 0.85rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.gate-form .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.gate-unlocked {
+  opacity: 0.92;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.45rem 0.85rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn-ghost:hover {
+  color: var(--ink);
+  border-color: var(--muted);
+}
+
+.btn-sm {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.8rem;
+}
+
+.btn-danger {
+  background: color-mix(in srgb, var(--danger) 22%, var(--bg1));
+  color: var(--ink);
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--line));
+  border-radius: 3px;
+  padding: 0.35rem 0.7rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 35%, var(--bg1));
+}
+
+.admin-list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.admin-list-head .panel-title {
+  margin-bottom: 0;
+}
+
+.admin-search {
+  display: flex;
+  gap: 0.4rem;
+  flex: 1 1 14rem;
+  max-width: 22rem;
+}
+
+.admin-search input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg0);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.4rem 0.55rem;
+}
+
+.admin-pkg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-top: 0.75rem;
+}
+
+.admin-pkg {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.75rem 0.85rem;
+  background: color-mix(in srgb, var(--bg0) 40%, transparent);
+}
+
+.admin-pkg-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+}
+
+.admin-pkg-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.admin-pkg-title a {
+  color: var(--ok);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.admin-pkg-title a:hover {
+  text-decoration: underline;
+}
+
+.admin-pkg-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.admin-ver-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.admin-ver-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.admin-ver-list li:first-child {
+  border-top: none;
 }
 
 /* —— 导航 —— */
@@ -553,6 +708,35 @@ h1 {
   background: transparent;
   padding: 0;
   font-size: 0.85rem;
+}
+
+/* GFM 表格：横向可滚动，避免窄屏撑破布局 */
+.md-table-wrap {
+  margin: 0.85em 0;
+  overflow-x: auto;
+}
+
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.md-table th,
+.md-table td {
+  border: 1px solid var(--line);
+  padding: 0.4em 0.65em;
+  vertical-align: top;
+}
+
+.md-table th {
+  background: var(--bg0);
+  font-weight: 600;
+  text-align: left;
+}
+
+.md-table tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg0) 45%, transparent);
 }
 
 .ver-notes {

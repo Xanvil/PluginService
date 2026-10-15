@@ -8,9 +8,9 @@ export interface Env {
   DB: D1Database;
   /** R2：.nupkg 二进制内容 */
   PACKAGES: R2Bucket;
-  /** 推送用 API Key（wrangler secret） */
+  /** 推送与管理页共用 API Key（wrangler secret） */
   NUGET_API_KEY: string;
-  /** Workers Static Assets（上传页等） */
+  /** Workers Static Assets（商店 / 管理页等） */
   ASSETS: Fetcher;
 }
 

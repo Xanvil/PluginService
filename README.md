@@ -3,10 +3,10 @@
 基于 **Cloudflare Workers + R2 + D1** 的个人/小团队 NuGet 源：
 
 - 拉取（restore / `dotnet add package`）公开
-- 推送（`dotnet nuget push` 或网页上传）需要 `X-NuGet-ApiKey`
+- CLI 推送与管理页共用同一密钥 `NUGET_API_KEY`（请求头 `X-NuGet-ApiKey`）
+- 管理页 `/admin`：可上传与硬删除
 - 协议：NuGet V3（Service Index、Flat Container、Registration、Search、PackagePublish）
 - 根路径 `/`：包商店（搜索 / 浏览 / 详情）
-- `/upload`：手动上传管理页
 
 ## 快速使用
 
@@ -16,7 +16,7 @@
 # 浏览器打开包商店
 # https://<host>/
 # 包详情：https://<host>/packages/{PackageId}
-# 上传页：https://<host>/upload
+# 管理页：https://<host>/admin
 
 # 添加源
 dotnet nuget add source https://<host>/v3/index.json -n PluginService
@@ -48,8 +48,7 @@ npm install
 # 本地 D1 迁移
 npm run db:migrate:local
 
-# 本地密钥（.dev.vars，勿提交）
-# 文件内容示例：
+# 本地密钥（.dev.vars，勿提交；CLI 与 /admin 共用）
 # NUGET_API_KEY=dev-secret-key
 
 npx wrangler dev
@@ -58,7 +57,7 @@ npx wrangler dev
 本地验证：
 
 ```bash
-# 商店：http://127.0.0.1:8787/  上传：http://127.0.0.1:8787/upload
+# 商店：http://127.0.0.1:8787/  管理：http://127.0.0.1:8787/admin
 curl http://127.0.0.1:8787/v3/index.json
 
 dotnet nuget push .\My.Lib.1.0.0.nupkg \
@@ -67,7 +66,7 @@ dotnet nuget push .\My.Lib.1.0.0.nupkg \
 ```
 
 网页商店：打开 `/` 搜索与浏览包，进入详情可复制 `dotnet add package` 命令、查看 **README / Release Notes**、下载 `.nupkg`。  
-网页上传：打开 `/upload` → 填写 API Key → 选择 `.nupkg` → 上传（`PUT /v3/package`）。
+管理页：打开 `/admin` → 填写与 CLI 相同的 API Key → 上传 `.nupkg`、浏览包并硬删除版本或整包（`/upload` 会 301 到 `/admin`）。
 
 打包时若希望详情页显示文档与图标，请在工程中配置：
 
@@ -146,19 +145,24 @@ dotnet nuget push .\My.Lib.1.0.0.nupkg \
 | 下载包 | `GET /v3/flatcontainer/{id}/{ver}/{id}.{ver}.nupkg` |
 | Registration | `GET /v3/registration/{id}/index.json` |
 | Search | `GET /v3/query?q=&skip=&take=` |
-| Publish | `PUT /v3/package`（Header: `X-NuGet-ApiKey`） |
+| Publish（CLI） | `PUT /v3/package`（Header: `X-NuGet-ApiKey`） |
+| 管理列表 | `GET /admin/api/packages?q=`（Header: `X-NuGet-ApiKey`） |
+| 管理上传 | `POST /admin/api/publish`（Header: `X-NuGet-ApiKey`） |
+| 删除版本 | `DELETE /admin/api/packages/{id}/versions/{ver}`（同上） |
+| 删除整包 | `DELETE /admin/api/packages/{id}`（同上） |
 
 ## 核心类型
 
 | 类型 | 对外方法 | 用途 |
 |------|----------|------|
-| Worker `fetch` | `src/index.ts` | `/v3/*` → API；其它 → `ASSETS` 静态页 |
-| `NuGetRouter` | `handle` | 协议路由 |
-| `PackageRepository` | `listVersions` / `getPackageObject` / `getRegistration` / `search` / `publish` | D1+R2 数据访问 |
+| Worker `fetch` | `src/index.ts` | `/v3/*` / `/admin/api/*` / 静态页 |
+| `NuGetRouter` | `handle` | NuGet 协议路由 |
+| `AdminRouter` | `handle` | 管理 API（访问密钥） |
+| `PackageRepository` | `listVersions` / `search` / `publish` / `publishBytes` / `deleteVersion` / `deletePackage` / `listForAdmin` | D1+R2 数据访问 |
 | `readMetadata` 等 | `nupkg.ts` | 解析 `.nupkg` / multipart |
-| `assertPushAuthorized` | `auth.ts` | 推送鉴权 |
+| `assertPushAuthorized` / `assertAdminAuthorized` | `auth.ts` | CLI 与管理共用 ApiKey 鉴权 |
 | 包商店 | `public/index.html` + `store.js` | 搜索、列表、详情、安装命令 |
-| 上传页 | `public/upload.html` + `upload.js` | 浏览器手动发布 |
+| 管理页 | `public/admin.html` + `admin.js` | ApiKey 门禁、上传、硬删除 |
 
 结构图见 [docs/nuget-feed.struct.md](docs/nuget-feed.struct.md)。
 
@@ -170,4 +174,4 @@ npm test
 
 ## 范围说明
 
-当前不包含：符号包 `.snupkg`、删除/unlist、网页管理台。自定义域名可在 Cloudflare Dashboard 为 Worker 绑定。
+当前不包含：符号包 `.snupkg`、unlist（软下架）、Cloudflare Access。删除为管理页硬删除。自定义域名可在 Cloudflare Dashboard 为 Worker 绑定。

@@ -46,6 +46,11 @@ export function readPackage(bytes: Uint8Array): PackageReadResult {
   if (readme) {
     meta.readme = readme;
   }
+  // nuspec 无 releaseNotes 时，回退包内常见变更说明文件
+  if (!meta.releaseNotes?.trim()) {
+    const fromFile = extractReleaseNotesFile(files);
+    if (fromFile) meta.releaseNotes = fromFile;
+  }
   const icon = extractIcon(files, meta.iconFile);
   return { meta, icon };
 }
@@ -73,7 +78,7 @@ export function parseNuspecXml(xml: string): PackageMetadata {
     throw new Error("Invalid nuspec: id and version are required");
   }
 
-  const releaseNotes = textOf(metadataBlock, "releaseNotes") || undefined;
+  const releaseNotes = textOf(metadataBlock, "releaseNotes").trim() || undefined;
   const readmeFile = textOf(metadataBlock, "readme") || undefined;
   const iconFile = textOf(metadataBlock, "icon") || undefined;
   const externalIconUrl = textOf(metadataBlock, "iconUrl") || undefined;
@@ -117,6 +122,35 @@ export function parseTags(raw: string): string[] {
 /** 写入 packages.tags 的规范化字符串（小写、空格分隔） */
 export function tagsToStorage(tags: string[]): string {
   return tags.map((t) => t.toLowerCase()).join(" ");
+}
+
+/**
+ * 当 nuspec 未声明 releaseNotes 时，从包内常见变更说明文件提取。
+ * 匹配根目录或浅层路径的 CHANGELOG / RELEASENOTES 等。
+ */
+export function extractReleaseNotesFile(
+  files: Record<string, Uint8Array>,
+): string | undefined {
+  const keys = Object.keys(files);
+  const candidates = keys
+    .map((k) => ({ k, n: k.replace(/\\/g, "/").toLowerCase() }))
+    .filter((x) => {
+      const base = x.n.split("/").pop() ?? "";
+      return (
+        /^(changelog|changes|releasenotes|release-notes|release_notes)(\.(md|txt|markdown))?$/i.test(
+          base,
+        )
+      );
+    })
+    .sort((a, b) => a.n.split("/").length - b.n.split("/").length);
+
+  const key = candidates[0]?.k;
+  if (!key) return undefined;
+  const raw = files[key];
+  if (!raw || raw.byteLength === 0) return undefined;
+  const sliced =
+    raw.byteLength > MAX_README_BYTES ? raw.subarray(0, MAX_README_BYTES) : raw;
+  return new TextDecoder().decode(sliced).trim() || undefined;
 }
 
 /**
@@ -291,16 +325,29 @@ function extractTagInner(xml: string, tag: string): string | null {
 }
 
 /**
- * 取标签文本；支持 CDATA，并做基础 XML 实体解码。
+ * 取标签文本；优先匹配 CDATA（避免正文中的 `</tag>` 打断非贪婪正则），
+ * 并做基础 / 数字 XML 实体解码。
  */
 function textOf(xml: string, tag: string): string {
+  // 1) 整段 CDATA：可含任意字符（含看起来像闭合标签的文本）
+  const cdataBlock = new RegExp(
+    `<${tag}\\b[^>]*>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*<\\/${tag}>`,
+    "i",
+  );
+  const cdataMatch = cdataBlock.exec(xml);
+  if (cdataMatch) {
+    return (cdataMatch[1] ?? "").trim();
+  }
+
+  // 2) 普通文本节点
   const re = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
   const m = re.exec(xml);
   if (!m) return "";
   let inner = (m[1] ?? "").trim();
-  const cdata = /^<!\[CDATA\[([\s\S]*?)\]\]>$/i.exec(inner);
-  if (cdata) {
-    return (cdata[1] ?? "").trim();
+  // 容错：正文里夹带 CDATA 包装
+  const embedded = /<!\[CDATA\[([\s\S]*?)\]\]>/i.exec(inner);
+  if (embedded) {
+    return (embedded[1] ?? "").trim();
   }
   return decodeXml(inner);
 }
@@ -313,6 +360,12 @@ function attrValue(attrs: string, name: string): string {
 
 function decodeXml(s: string): string {
   return s
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h: string) =>
+      String.fromCodePoint(Number.parseInt(h, 16)),
+    )
+    .replace(/&#([0-9]+);/g, (_, d: string) =>
+      String.fromCodePoint(Number.parseInt(d, 10)),
+    )
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')

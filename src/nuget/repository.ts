@@ -563,6 +563,19 @@ export class PackageRepository {
   }
 
   /**
+   * 某 id+version 是否已存在（供管理页预览提示冲突）。
+   */
+  async versionExists(id: string, version: string): Promise<boolean> {
+    const row = await this.env.DB.prepare(
+      `SELECT 1 AS ok FROM package_versions
+       WHERE id_lower = ? AND version_lower = ?`,
+    )
+      .bind(id.toLowerCase(), version.toLowerCase())
+      .first();
+    return !!row;
+  }
+
+  /**
    * 硬删除单个版本：R2（nupkg + 图标）+ D1 package_versions。
    * 若无剩余版本则删除 packages 行；否则重算 latest_version。
    * @returns 是否找到并删除了该版本

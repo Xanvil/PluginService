@@ -147,6 +147,7 @@ dotnet nuget push .\My.Lib.1.0.0.nupkg \
 | Search | `GET /v3/query?q=&skip=&take=` |
 | Publish（CLI） | `PUT /v3/package`（Header: `X-NuGet-ApiKey`） |
 | 管理列表 | `GET /admin/api/packages?q=`（Header: `X-NuGet-ApiKey`） |
+| 管理预览 | `POST /admin/api/preview`（Header: `X-NuGet-ApiKey`，不写入） |
 | 管理上传 | `POST /admin/api/publish`（Header: `X-NuGet-ApiKey`） |
 | 删除版本 | `DELETE /admin/api/packages/{id}/versions/{ver}`（同上） |
 | 删除整包 | `DELETE /admin/api/packages/{id}`（同上） |

@@ -56,7 +56,7 @@
         </section>
 
         <div id="admin-body" hidden>
-          <!-- 上传 -->
+          <!-- 上传 + 预览 -->
           <section class="panel" aria-labelledby="upload-heading">
             <h2 id="upload-heading" class="panel-title">上传包</h2>
             <form id="upload-form" novalidate>
@@ -71,8 +71,60 @@
                 />
                 <p id="file-name" class="file-name">未选择文件</p>
               </label>
+
+              <div id="preview-panel" class="pkg-preview" hidden>
+                <div class="pkg-preview-head">
+                  <img
+                    id="preview-icon"
+                    class="pkg-preview-icon"
+                    alt=""
+                    hidden
+                  />
+                  <div class="pkg-preview-identity">
+                    <p id="preview-idver" class="pkg-preview-idver"></p>
+                    <p id="preview-title" class="pkg-preview-title"></p>
+                    <p id="preview-conflict" class="pkg-preview-conflict" hidden></p>
+                  </div>
+                </div>
+                <dl class="pkg-preview-meta">
+                  <div>
+                    <dt>作者</dt>
+                    <dd id="preview-authors">—</dd>
+                  </div>
+                  <div>
+                    <dt>大小</dt>
+                    <dd id="preview-size">—</dd>
+                  </div>
+                  <div>
+                    <dt>项目</dt>
+                    <dd id="preview-project">—</dd>
+                  </div>
+                  <div class="pkg-preview-full">
+                    <dt>标签</dt>
+                    <dd id="preview-tags">—</dd>
+                  </div>
+                  <div class="pkg-preview-full">
+                    <dt>描述</dt>
+                    <dd id="preview-description">—</dd>
+                  </div>
+                </dl>
+                <div id="preview-deps-wrap" class="pkg-preview-block" hidden>
+                  <h3 class="pkg-preview-sub">依赖</h3>
+                  <ul id="preview-deps" class="pkg-preview-deps"></ul>
+                </div>
+                <div id="preview-notes-wrap" class="pkg-preview-block" hidden>
+                  <h3 class="pkg-preview-sub">Release Notes</h3>
+                  <div id="preview-notes" class="md-body doc-panel"></div>
+                </div>
+                <div id="preview-readme-wrap" class="pkg-preview-block" hidden>
+                  <h3 class="pkg-preview-sub">README</h3>
+                  <div id="preview-readme" class="md-body doc-panel"></div>
+                </div>
+              </div>
+              <p id="preview-status" class="status" role="status" aria-live="polite"></p>
+
               <div class="actions">
-                <button type="submit" id="submit-btn">上传并发布</button>
+                <button type="submit" id="submit-btn" disabled>上传并发布</button>
               </div>
               <p id="upload-status" class="status" role="status" aria-live="polite"></p>
             </form>

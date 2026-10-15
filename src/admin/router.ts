@@ -3,7 +3,7 @@
  */
 
 import { assertAdminAuthorized } from "../nuget/auth";
-import { extractNupkgFromRequest } from "../nuget/nupkg";
+import { extractNupkgFromRequest, readPackage } from "../nuget/nupkg";
 import { PackageRepository } from "../nuget/repository";
 import type { Env } from "../nuget/types";
 import { PublishError } from "../nuget/types";
@@ -36,6 +36,51 @@ export class AdminRouter {
         const take = Number(url.searchParams.get("take") ?? "50");
         const packages = await repo.listForAdmin(q, Number.isFinite(take) ? take : 50);
         return json({ packages });
+      }
+
+      // POST /admin/api/preview — 解析 nupkg 详情，不写入存储
+      if (request.method === "POST" && path === "/admin/api/preview") {
+        let bytes: Uint8Array;
+        try {
+          bytes = await extractNupkgFromRequest(request);
+        } catch (e) {
+          return json(
+            {
+              error: e instanceof Error ? e.message : "Invalid package body",
+            },
+            400,
+          );
+        }
+        try {
+          const { meta, icon } = readPackage(bytes);
+          const alreadyExists = await repo.versionExists(meta.id, meta.version);
+          let iconDataUrl: string | null = null;
+          if (icon) {
+            iconDataUrl = `data:${icon.contentType};base64,${uint8ToBase64(icon.bytes)}`;
+          }
+          return json({
+            id: meta.id,
+            version: meta.version,
+            title: meta.title ?? null,
+            description: meta.description ?? null,
+            authors: meta.authors ?? null,
+            tags: meta.tags ?? [],
+            releaseNotes: meta.releaseNotes ?? null,
+            readme: meta.readme ?? null,
+            projectUrl: meta.projectUrl ?? null,
+            dependencyGroups: meta.dependencyGroups ?? [],
+            iconDataUrl,
+            alreadyExists,
+            sizeBytes: bytes.byteLength,
+          });
+        } catch (e) {
+          return json(
+            {
+              error: e instanceof Error ? e.message : "Invalid nupkg",
+            },
+            400,
+          );
+        }
       }
 
       // POST /admin/api/publish
@@ -109,4 +154,15 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8" },
   });
+}
+
+/** Uint8Array → base64（用于预览图标 data URL） */
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const slice = bytes.subarray(i, i + chunk);
+    binary += String.fromCharCode(...slice);
+  }
+  return btoa(binary);
 }

@@ -60,6 +60,30 @@ describe("parseNuspecXml", () => {
     expect(meta.projectUrl).toBe("https://example.com/demo");
     expect(meta.tags).toEqual(["plugin", "CorelDraw", "extension"]);
   });
+
+  it("CDATA 内含伪闭合标签时仍完整解析 releaseNotes", () => {
+    const xml = `<?xml version="1.0"?>
+<package><metadata>
+  <id>Y</id><version>1.0.0</version><description>d</description>
+  <releaseNotes><![CDATA[Fixed </releaseNotes> in docs
+More notes]]></releaseNotes>
+</metadata></package>`;
+    const meta = parseNuspecXml(xml);
+    expect(meta.releaseNotes).toContain("Fixed </releaseNotes> in docs");
+    expect(meta.releaseNotes).toContain("More notes");
+  });
+
+  it("解析带数字实体的 releaseNotes", () => {
+    const xml = `<?xml version="1.0"?>
+<package><metadata>
+  <id>Z</id><version>1.0.0</version><description>d</description>
+  <releaseNotes>line1&#xA;line2&#10;done</releaseNotes>
+</metadata></package>`;
+    const meta = parseNuspecXml(xml);
+    expect(meta.releaseNotes).toContain("line1");
+    expect(meta.releaseNotes).toContain("line2");
+    expect(meta.releaseNotes).toContain("done");
+  });
 });
 
 describe("parseTags", () => {
@@ -97,5 +121,18 @@ describe("readPackage", () => {
     });
     const meta = readMetadata(zipped);
     expect(meta.readme).toBe("# Fallback readme");
+  });
+
+  it("nuspec 无 releaseNotes 时回退 CHANGELOG.md", () => {
+    const nuspec = `<?xml version="1.0"?>
+<package><metadata>
+  <id>X</id><version>1.0.0</version><description>d</description>
+</metadata></package>`;
+    const zipped = zipSync({
+      "X.nuspec": new TextEncoder().encode(nuspec),
+      "CHANGELOG.md": new TextEncoder().encode("## 1.0.0\n\n- first release\n"),
+    });
+    const meta = readMetadata(zipped);
+    expect(meta.releaseNotes).toContain("first release");
   });
 });
